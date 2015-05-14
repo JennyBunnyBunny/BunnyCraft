@@ -1,0 +1,934 @@
+# coding: utf-8
+#中文注释/in  Chinese
+
+import direct.directbase.DirectStart
+from direct.showbase.DirectObject import DirectObject
+from direct.particles.Particles import Particles
+from direct.particles.ParticleEffect import ParticleEffect
+from direct.task import Task
+from direct.actor.Actor import Actor
+from direct.gui.OnscreenText import OnscreenText
+from direct.gui.DirectGui import *
+from direct.interval.IntervalGlobal import *
+from direct.fsm.FSM import FSM
+
+from panda3d.core import Fog,Material,TransparencyAttrib
+from panda3d.core import PandaNode,NodePath,TextNode,GeomNode
+from panda3d.core import GeomVertexFormat, GeomVertexData,Geom, GeomTriangles, GeomVertexWriter
+from panda3d.core import Vec3, Vec4, VBase4,Point3,CardMaker,BitMask32
+from panda3d.core import AmbientLight,PointLight,DirectionalLight
+from panda3d.core import CollisionTraverser,CollisionNode
+from panda3d.core import CollisionHandlerQueue,CollisionRay,CollisionSphere, CollisionSegment
+from panda3d.ai import *
+
+from math import sin,cos,pi
+import random
+import csv
+
+floorTex=loader.loadTexture('textures/texture1.png')
+sandTex=loader.loadTexture('textures/texture3.png')
+brickTex=loader.loadTexture('textures/texture2.png')
+grassTex=loader.loadTexture('textures/texture4.png')
+waterTex=loader.loadTexture('textures/texture5.jpg')
+cloudTex = None
+sunTex = loader.loadTexture('textures/sun_1k_tex.jpg')
+winTex=loader.loadTexture('textures/youwin.jpg')
+
+cubePath = ['models/cube0.bam','models/cube1.bam','models/cube2.bam','models/cube3.bam','models/cube4.bam','models/cube5.bam','models/cube6.bam']
+
+
+#标题和说明设定
+
+def addTitle(text):
+	return OnscreenText(text = text,style = 1, fg = (1,1,1,1), pos = (1.3,-0.95),align=TextNode.ARight, scale = .07)
+	
+def addInstructions(pos, msg):
+    return OnscreenText(text=msg, style=1, fg=(1,1,1,1), mayChange=1,
+                        pos=(-1.3, pos), align=TextNode.ALeft, scale = .05, shadow=(0,0,0,1), shadowOffset=(0.1,0.1))
+
+def addWords(text):
+	return OnscreenText(text = text,style = 1, fg = (0,0,1,1), bg = (0.6,0.8,2,0.5),pos = (0,0),align=TextNode.ACenter, scale = .07,shadow=(0,0,0,1))
+
+def distance(lst,x,y):
+	result = True
+	for pos in lst:
+		dist = (x-pos[0]) **2 + (y-pos[1])**2
+		if dist < 50:
+			result = False
+	return result
+
+#读取csv文件的
+def read(name):
+	f = open(name,'rb')
+	reader = csv.reader(f)
+	M = []
+	for i in reader:
+		M.append(i)
+	return M
+
+#maze是个矩阵，就是我们的迷宫，从中选出eve可以活动的地方
+def selectPos(maze):
+	pos = []
+	w = len(maze)
+	l = len(maze[0])
+	
+	while len(pos) < 5:
+		x,y = random.randint(0,w-5),random.randint(0,l-5)
+		#连续的四个都是空的
+		if maze[x][y] == ' 'and maze[x][y+1] == ' 'and maze[x][y+2] == ' 'and maze[x][y+3] == ' ':
+			#离起点和终点还有列表中已经存在的点足够远
+			if x**2 + y**2 > 100 and (w-x-5)**2 + (l-y-5)**2 > 100 and distance(pos,x,y) :
+				pos.append((2*x - 78,2*y - 78,1))
+				
+	while len(pos) < 10:
+		x,y = random.randint(0,w-5),random.randint(0,l-5)
+		
+		if maze[x][y] == ' 'and maze[x+1][y] == ' 'and maze[x+2][y] == ' 'and maze[x+3][y] == ' ':
+			
+			if x**2 + y**2 > 100 and (w-x-5)**2 + (l-y-5)**2 > 100 and distance(pos,x,y) :
+				pos.append((2*x - 78,2*y - 78,0))
+	print pos
+	return pos
+
+def randomPos(maze):
+	pos = []
+	w = len(maze)
+	l = len(maze[0])
+	
+	while len(pos) < 10:
+		x,y = random.randint(0,w-5),random.randint(0,l-5)
+		if maze[x][y] == ' ':
+			pos.append((2*x - 78,2*y - 78))
+	return pos
+
+#++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+class World(DirectObject):
+	def __init__(self):
+		
+		render.prepareScene(base.win.getGsg())
+		#base.oobe()
+		base.setFrameRateMeter(True)
+		
+		#声音
+		self.sound1 = base.loader.loadSfx('/文档/小日子/python&game/bunnycraft/musicbox.ogg')
+		
+		
+		#我们的主人公ralph
+		self.ralph = Actor("ralph.egg.pz",{"run":"models/ralph-run.egg.pz","walk":"models/ralph-walk.egg.pz"})
+		self.ralph.reparentTo(render)
+		self.ralph.setPos(-76,74,0)
+		self.ralph.setScale(0.4)
+		self.isMoving = False
+		self.spos = None
+		self.camZ = 2
+		
+		self.moveSpeed = 20
+		self.rotateSpeed = 80
+		
+		#悬浮框，现实位置
+		self.makeCardMap()
+		
+		#和他的小宠物panda
+		self.panda = Actor("models/panda-model.egg.pz",{"run":"models/panda-walk4.egg.pz"})
+		self.panda.reparentTo(render)
+		self.panda.setPos(-74,76,0)
+		self.panda.setScale(0.001,0.001,0.001)
+		self.setAI()
+		
+		#标题什么的
+		self.instMouse = addInstructions(0.5,"click mouse to diminish a cube")
+		self.instMouse1 = addInstructions(0.4,"double click to add a cube")
+		self.instSpace = addInstructions(0.3,"press space to jump")
+		self.instArrow = addInstructions(0.2,"use arrows to move Ralph")
+		self.instTex = addInstructions(0.1,"change texture:")
+		self.inst0 = addInstructions(0.0,"press 1:floorTex")
+		self.inst1 = addInstructions(-0.1,'2:sandTex')
+		self.inst2 = addInstructions(-0.2,'3:brickTex')
+		self.inst3 = addInstructions(-0.3,'4:grassTex')
+		self.inst4 = addInstructions(-0.4,'5:cloudTex')
+		self.inst5 = addInstructions(-0.5,'6:waterTex')
+		
+		#摄像机,必须禁用鼠标控制才能控制摄像机
+		base.disableMouse()
+		base.camera.setPos(0,40,3)
+		
+		#按键
+		self.keyMap = {"left":0, "right":0, "forward":0, "back":0, "up":0,"cube":0,"texture":0,'mode':0,'camleft':0,'camright':0,'camera':0}
+		
+		#所有的立方体
+		self.cubes = {}
+		self.cubeNumber = 0
+		
+		#地形图:(x,y)~zmax
+		self.heightMap = {}
+		
+		#要处理的立方体们
+		self.toAdd = []
+		self.toRemove = []
+		
+		#放装饰物的节点
+		self.node = []
+		for x in range(-78,78):
+			for y in range(-78,78):
+				if x % 6 == 0 and y % 6 == 0:
+					self.node.append((x,y))
+		
+		random.shuffle(self.node)
+		
+		#女巫们的生成
+		self.maze = read('environm.csv')
+		self.evePos = selectPos(self.maze)
+		self.eveNumber = 0
+		self.eveType = ['startEve','finalEve','highEve','jumpEve']
+		self.eves = []	
+
+		#准备好的随机位置
+		self.randomPos = randomPos(self.maze)
+		
+		
+		#任务管理器
+		
+		self.last = 0           #向下运动的
+		self.velocityZ = 8
+		self.velocityZ_ = 0
+		
+		taskMgr.add(self.doAll,'do all things')
+		#一秒钟检查一下是否需要隐藏块或者显示块
+		taskMgr.doMethodLater(1.0 ,self.checkCube,'checkCube')
+		
+		self.accept('arrow_up',self.setKey,['forward',1])
+		self.accept('arrow_down',self.setKey,['back',1])
+		self.accept('arrow_left',self.setKey,['left',1])
+		self.accept('arrow_right',self.setKey,['right',1])
+		self.accept('arrow_up-up',self.setKey,['forward',0])
+		self.accept('arrow_down-up',self.setKey,['back',0])
+		self.accept('arrow_left-up',self.setKey,['left',0])
+		self.accept('arrow_right-up',self.setKey,['right',0])
+		self.accept('mouse1',self.setKey,['cube',-1])
+		self.accept('mouse3',self.setKey,['cube',1])
+		self.accept('1',self.setKey,['texture',0])
+		self.accept('2',self.setKey,['texture',1])
+		self.accept('3',self.setKey,['texture',2])
+		self.accept('4',self.setKey,['texture',3])
+		self.accept('5',self.setKey,['texture',4])
+		self.accept('space',self.setKey,['up',1])
+		self.accept('enter',self.setKey,['mode',1])
+		self.accept('f',self.setKey,['camleft',1])
+		self.accept('j',self.setKey,['camright',1])
+		self.accept('f-up',self.setKey,['camleft',0])
+		self.accept('j-up',self.setKey,['camright',0])
+		self.accept('g',self.setKey,['camera',1])
+		self.accept('h',self.setKey,['camera',0])
+		#碰撞检测
+		#创建 traverser 和 handler
+		self.picker = CollisionTraverser()
+		self.pq = CollisionHandlerQueue()
+		self.pq1 = CollisionHandlerQueue()
+		
+		#创建鼠标检测这个node，并且添加到摄像机节点下面
+		self.pickerNode = CollisionNode('mouseRay')
+		self.pickerNP = base.camera.attachNewNode(self.pickerNode)
+		#为了区分其他东西的碰撞，碰撞（into）物体的数据格式
+		self.pickerNode.setFromCollideMask(BitMask32.bit(1))
+		self.pickerNode.setIntoCollideMask(0)
+		#生成碰撞物体添加
+		#如果要限制鼠标的点选范围，应该用CollisionLine or CollisionSegment
+		self.pickerRay = CollisionRay()
+		self.pickerNode.addSolid(self.pickerRay)
+		self.picker.addCollider(self.pickerNP,self.pq)
+		
+		#摄像机的碰撞检测
+		#self.cCamNP = CollisionNode('mouseSphere')
+		#self.cCamera = base.camera.attachNewNode(self.cCamNP)
+		#self.cCamNP.setFromCollideMask(BitMask32.bit(1))
+		#self.cCamNP.setIntoCollideMask(0)
+		#self.picker.addCollider(self.cCamera,self.pq1)
+		
+		#人物的碰撞
+		self.ralphColNP = self.ralph.attachNewNode(CollisionNode('ralph'))
+		ralphSphere = CollisionSphere(0,0,2,1.5)
+		self.ralphColNP.node().addSolid(ralphSphere)
+		self.picker.addCollider(self.ralphColNP,self.pq1)
+		self.ralphColNP.node().setFromCollideMask(BitMask32.bit(1) | BitMask32.bit(0))
+		self.ralphColNP.node().setIntoCollideMask(0)
+
+		
+		#环境场景设定
+		#启动阴影
+		#render.setShaderAuto()
+		self.startCubes = render.attachNewNode('startCubes')
+		
+		self.env = loader.loadModel('models/environm.bam')
+		self.env.reparentTo(render)
+		self.env.setTag('environment','1')
+		
+		#背景光
+		self.envLight =AmbientLight( "ambientLight" )
+		self.envLight.setColor(Vec4(0.5,0.5,0.5,1))
+		self.envLNP = render.attachNewNode(self.envLight)
+		render.setLight(self.envLNP)
+		#选中背景光
+		self.envLight1 =AmbientLight( "ambientLight1" )
+		self.envLight1.setColor(Vec4(1,1,1,1))
+		self.envLNP1 = render.attachNewNode(self.envLight1)
+		#太阳背景光
+		self.envLight2 =AmbientLight( "ambientLight2" )
+		self.envLight2.setColor(Vec4(2,2,2,1))
+		self.envLNP2 = render.attachNewNode(self.envLight2)
+		
+		
+		
+		#太阳
+		self.sun = loader.loadModel("models/planet_sphere.egg.pz")
+		self.sun.setTexture(sunTex)
+		self.sun.setPos(60,100,12)
+		self.sun.setScale(2)
+		self.sun.reparentTo(render)
+		self.sun.setLight(self.envLNP2)
+		
+		#太阳光 
+		self.sunLight = DirectionalLight('sunLight')
+		self.sunLight.setColor(Vec4(0.8,0.8,0.4, 1))
+		self.sunLight.setShadowCaster(True, 512, 512)
+		self.sunLNP = render.attachNewNode(self.sunLight)
+		self.sunLNP.setHpr(-30,30,-10)
+		render.setLight(self.sunLNP)
+		
+		
+		#雾，实验中
+		self.fog = Fog('distanceFog')
+		self.fog.setColor(0.6,0.8,2)
+		self.fog.setExpDensity(.02)
+		render.setFog(self.fog)
+		
+		base.setBackgroundColor(0.6,0.8,2)
+		
+		self.defaultTex = 0
+		
+		#生成地形图
+		self.makeMap()
+		
+		#方块
+		self.cloud = render.attachNewNode('cloud')
+		self.cloud.setTransparency(TransparencyAttrib.MAlpha)
+		self.cloud.setColor(1,1,1,0.5)
+		for i in range(4):
+			self.makeCube(30 + 2*i,30,11,self.cloud,4)
+			self.makeCube(30 + 2*i,28,11,self.cloud,4)
+		self.makeCube(32,32,11,self.cloud,4)
+		self.makeCube(34,32,11,self.cloud,4)
+		self.makeCube(32,26,11,self.cloud,4)
+		self.makeCube(34,26,11,self.cloud,4)
+		
+		for i in range(6):
+			self.makeCube(-30 + 2*i,40,15,self.cloud,4)
+			self.makeCube(-30 + 2*i,38,15,self.cloud,4)
+		for i in range(4):
+			self.makeCube(-28 + 2*i,42,15,self.cloud,4)
+			self.makeCube(-28 + 2*i,36,15,self.cloud,4)
+		
+		for i in range(6):
+			self.makeCube(2*i,20,13,self.cloud,4)
+			self.makeCube(2*i,18,13,self.cloud,4)
+		for i in range(4):
+			self.makeCube(2 + 2*i,22,13,self.cloud,4)
+			self.makeCube(2 + 2*i,16,13,self.cloud,4)
+			
+		self.cloud.flattenStrong()
+		
+		self.buildFinal()
+		
+		#GUI
+		self.v = [0]
+		self.button1 = DirectRadioButton(text = 'normal mode', variable=self.v, value=[0], scale=0.05, pos=(-0.9,0,0.8), command=self.changeMode)
+		self.button2 = DirectRadioButton(text = 'maze mode', variable=self.v, value=[1], scale=0.05, pos=(-0.5,0,0.8), command=self.changeMode)
+		self.button3 = DirectCheckButton(text = 'music on/off',scale=0.05, pos=(-0.9,0,0.7), command=self.changeMusic)
+		self.buttons = [self.button1,self.button2]
+		for button in self.buttons:
+		    button.setOthers(self.buttons)
+
+#-----------------------------------------------------------------------------------------------
+		
+	#生成cube
+	def makeCube(self,x,y,z,myRender,texture):
+		
+		if texture in range(7):
+			cube = loader.loadModel(cubePath[texture])
+			
+			cube.reparentTo(myRender)
+			cube.setTag("myCube",str(self.cubeNumber))
+			
+			cube.setPos(x,y,z)
+			
+			self.cubes[cube] = (x,y,z)
+			self.cubeNumber += 1
+			#修改地形图
+			if self.heightMap[(x,y)] < z +1:
+				self.heightMap[(x,y)] = z +1
+			return cube
+		else:
+			pass
+			
+	def makeEve(self,x,y,bool): 
+		eve = Eve()
+		eve.actor.setTag('eve',str(self.eveNumber))
+		self.eves.append([eve,random.choice(self.eveType)]) #
+		eve.enterWalk(x,y,bool)
+		self.eveNumber += 1
+		
+	def setSpos(self,x,y,z):
+		self.spos = (x,y,z)
+		
+	def makeMap(self):
+		for i in xrange(-40,40):
+			for j in xrange(-40,40):
+				self.heightMap[(2*i,2*j)] = 0 
+		
+		for pos in self.cubes.values():
+			x,y = pos[0],pos[1]
+			z = pos[2]
+			if (x,y) in self.heightMap :
+				if z +1 > self.heightMap[(x,y)]:
+					self.heightMap[(x,y)] = z +1
+				
+		#设置键盘对应的值
+	def setKey(self,key,value):
+		self.keyMap[key] = value
+		#if key == 'mode':
+		#	self.keyMap[key] += value
+		#else:
+		#	self.keyMap[key] = value
+		#print self.keyMap
+		
+		#移动摄像机
+	def moveRalph(self,dt):
+		
+		cx = base.camera.getX()
+		cx_ = cx
+		
+		h = self.ralph.getH()
+		x,y,z = self.ralph.getPos()
+		
+		tx,ty = 2*int(x/2),2*int(y/2)
+		h_ = h
+		x_,y_,z_ = x,y,z	
+		
+		
+		#******控制Ralph*****
+		
+		if self.keyMap["forward"] + self.keyMap["back"] + self.keyMap["left"] + self.keyMap["right"] > 0:
+			if self.isMoving is False:
+				self.ralph.loop("run")
+				self.isMoving = True
+		else:
+			if self.isMoving:
+				self.ralph.stop()
+				self.ralph.pose("walk",5)
+				self.isMoving = False
+		
+		if self.keyMap['left'] == 1:
+			h_ = h+globalClock.getDt() * self.rotateSpeed
+		if self.keyMap['right'] == 1:
+			h_ = h-globalClock.getDt() * self.rotateSpeed
+		if self.keyMap['back'] == 1:
+			x_ = x - sin(h* pi /180) * globalClock.getDt() * self.moveSpeed
+			y_ = y + cos(h* pi /180) * globalClock.getDt() * self.moveSpeed
+		if self.keyMap['forward'] == 1:
+			x_ = x + sin(h* pi /180) * globalClock.getDt() * self.moveSpeed
+			y_ = y - cos(h* pi /180) * globalClock.getDt() * self.moveSpeed
+			
+		if self.keyMap['up'] == 1:
+			#禁用移动功能
+			if self.v == [1]:
+				x_ = x
+				y_ = y
+			if z >= self.heightMap[(tx,ty)] - 0.2 :
+				z_ = z + dt * self.velocityZ
+				self.velocityZ = -dt * 10 + self.velocityZ
+			if z < self.heightMap[(tx,ty)] and z >= self.heightMap[(tx,ty)] - 1 :
+				z_ = self.heightMap[(tx,ty)]
+				self.setKey('up',0)
+				self.velocityZ = 8
+				
+		if self.goDown() and self.keyMap['up'] == 0:
+			z_ = z + dt * self.velocityZ_
+			self.velocityZ_ = -dt * 10 + self.velocityZ_
+			if z < self.heightMap[(tx,ty)] + 0.1 :
+				z_ = self.heightMap[(tx,ty)] 
+				self.velocityZ_ = 0
+		
+		if abs(x) > 80 or (abs(y) > 80 or z < -1 ):
+			self.spos = (0,20,0)
+			
+		#最后更新位置
+		self.ralph.setH(h_)
+		self.ralph.setPos(x_,y_,z_)
+		
+		#先看是不是要到什么特别的位置，如果有的话要去
+		if self.ralphCollide() and self.spos == None:
+			self.ralph.setPos(x,y,z)
+		elif self.spos != None:
+			xs,ys,zs = self.spos
+			self.ralph.setPos(xs,ys,zs)
+			self.spos = None
+		
+		
+		#*****控制照相机******f
+
+		if self.keyMap['camera'] == 0:
+			base.camera.lookAt(self.ralph)
+			if self.keyMap['camleft'] == 1:
+				cx_ = cx + globalClock.getDt() * self.moveSpeed
+			if self.keyMap['camright'] == 1:
+				cx_ = cx - globalClock.getDt() * self.moveSpeed
+			
+			base.camera.setX(cx_)
+			base.camera.lookAt(self.ralph)
+			base.camera.setZ(self.ralph.getZ() + self.camZ)
+			
+			#这个模式中着摄像机的运动是保持和ralph相距不远的
+			camvec = self.ralph.getPos() - base.camera.getPos()
+			camvec.setZ(0)
+			camdist = camvec.length()
+			camvec.normalize()
+			if (camdist > 10.0):
+				base.camera.setPos(base.camera.getPos() + camvec*(camdist-10))
+				camdist = 10.0
+			if (camdist < 5.0):
+				base.camera.setPos(base.camera.getPos() - camvec*(5-camdist))
+				camdist = 5.0
+		elif self.keyMap['camera'] == 1:
+			base.camera.setPos(0,0,400)
+			base.camera.setP(-90)
+			render.clearFog()
+		
+
+
+		
+	#改变默认的纹理样式
+	def handleTex(self):
+		if self.keyMap['texture'] == 0:
+			self.defaultTex = 0
+		if self.keyMap['texture'] == 1:
+			self.defaultTex = 1
+		if self.keyMap['texture'] == 2:
+			self.defaultTex = 2
+		if self.keyMap['texture'] == 3:
+			self.defaultTex = 3
+		if self.keyMap['texture'] == 4:
+			self.defaultTex = 4
+		if self.keyMap['texture'] == 5:
+			self.defaultTex = 5
+
+	def handleCube(self):
+		#鼠标点击一个就删除这个方块，彻底删除
+		if base.mouseWatcherNode.hasMouse():
+			mx = base.mouseWatcherNode.getMouseX()
+			my = base.mouseWatcherNode.getMouseY()
+			for cube in self.cubes:
+				cube.clearLight()
+			
+			self.pickerRay.setFromLens(base.camNode,mx,my)
+			self.picker.traverse(render)
+			if self.pq.getNumEntries() > 0:
+				#队列中由远及近排序
+				self.pq.sortEntries()
+				pickerObj = self.pq.getEntry(0).getIntoNodePath()
+				pickerObj = pickerObj.findNetTag('myCube')
+				if pickerObj in self.cubes:
+					pickerObj.setLight(self.envLNP1)
+				if self.keyMap['cube'] == -1:
+					#del self.cubes[pickerObj]
+					#pickerObj.remove()
+					self.toRemove.append(pickerObj)
+					self.setKey('cube',0)
+					
+				elif self.keyMap['cube'] == 1:
+					#self.addCube(pickerObj)
+					self.toAdd.append(pickerObj)
+					self.setKey('cube',0)
+				
+
+		#鼠标点选增加一个方块，在空的位置上随机增加
+	def addCube(self,cube):
+		if len(self.blankCube(cube)) >= 1 :
+			pos = random.choice(self.blankCube(cube))
+			self.makeCube(pos[0],pos[1],pos[2],render,self.defaultTex)
+		else:
+			pass
+			
+	#优化任务处理的，为了保证帧率		
+	def _handleCube(self):
+		for obj in self.toRemove:
+			if obj in self.cubes:
+				self.checkHeight(obj)
+				self.cubeNumber -= 1
+				obj.remove()
+		for obj in self.toAdd:
+			self.cubeNumber += 1
+			self.addCube(obj)
+		self.toRemove = []
+		self.toAdd = []
+		
+	def setAI(self):
+		
+	    self.AIworld = AIWorld(render)
+	    self.AIchar = AICharacter("ralph's pat",self.panda,500,0.05,5)
+	    self.AIworld.addAiChar(self.AIchar)
+	    self.AIbehaviors = self.AIchar.getAiBehaviors()
+	    self.AIbehaviors.pursue(self.ralph)
+	    self.panda.loop("run")
+
+		
+
+	#查看一个方块附近的空位置
+	def blankCube(self,cube):
+		
+		x,y,z = self.cubes[cube]
+		blank = [(x+2,y,z),(x-2,y,z),(x,y+2,z),(x,y-2,z),(x,y,z+2),(x,y,z-2)]
+		blank_ = []
+		
+		for pos in blank:
+			if not pos in self.cubes.values() and self.inMap(pos):
+				blank_.append(pos)
+		return blank_
+		
+	#在删除方块的时候判断是不是需要更改高度图并且从self.cubes中删除了这个东东
+	def checkHeight(self,obj):
+		pos = self.cubes[obj]
+		del self.cubes[obj]
+		if self.heightMap[(pos[0],pos[1])] == pos[2] + 1:
+			self.heightMap[(pos[0],pos[1])] = 0
+			for z in range(1,pos[2],2)[::-1]:
+				if [pos[0],pos[1],z] in self.cubes.values():
+					self.heightMap[(pos[0],pos[1])] = z + 1
+					break
+		
+
+	#查看一个块是不是可见的
+	def checkCube(self,task):
+		for cube in self.cubes:
+			if len(self.blankCube(cube)) == 0:
+				cube.hide(BitMask32.allOn())
+			else:
+				cube.show(BitMask32.allOn())
+		return task.again
+	
+	#检测一个位置是不是在地图里面	
+	def	inMap(self,pos):
+		if abs(pos[0]) < 77 and (abs(pos[1]) < 77 and pos[2] > 0 ):
+			return True
+		else:
+			return False
+			
+	#检测摄像机是不是该下去
+	def goDown(self):
+		x,y,z =self.ralph.getPos()
+		tx,ty = 2*int(x/2),2*int(y/2)
+		if z > self.heightMap[(tx,ty)]:
+			return True
+		else:
+			return False
+			
+	#控制移动范围的碰撞检测,还有检测ralph的碰撞会不会引发什么别的
+	def ralphCollide(self):
+		
+		self.picker.traverse(render)
+		
+		if self.pq1.getNumEntries() > 0:
+			self.pq1.sortEntries()
+			Obj = self.pq1.getEntry(0).getIntoNodePath()
+			if Obj.node().getIntoCollideMask() == BitMask32.bit(0):
+				Obj = Obj.findNetTag('eve')
+				n = int(Obj.getTag('eve'))
+				Obj = self.eves[n][0]
+				type = self.eves[n][1]
+				self.eveAct(Obj,type)
+			return True
+		else:
+			return False
+			
+	def check(self):
+		if self.cubeNumber > 500:
+			return False
+		else:
+			return True
+
+	#是不是到达终点了
+	def final(self):
+		x,y,z = self.ralph.getPos()
+		if x > 73 and x < 77 and y > 75 and y < 79:
+			self.winSphere = loader.loadModel("models/planet_sphere.egg.pz")
+			self.winSphere.setScale(0.5)
+			self.winSphere.setTexture(winTex)
+			self.winSphere.reparentTo(render)
+			self.winSphere.setPos(74,75,3)
+			return True	
+			
+	def delete(self,nodePath):
+		nodePath.remove()
+		
+	#女巫的行为
+	def eveAct(self,eve,type):
+		eve.exitWalk()
+		eve.request("Magic")
+		if type == 'startEve':
+			
+			self.words = addWords('Go Back To The Start ! HaHa !')
+			Sequence(Wait(2.0),Func(self.setSpos,-76,-74,2),Func(self.delete,self.words)).start()
+			
+		if type == 'finalEve':
+			self.words = addWords('Do Not Appeciate me!')
+			Sequence(Wait(2.0),Func(self.setSpos,74,76,2),Func(self.delete,self.words)).start()
+			
+		if type == 'highEve':
+			self.words = addWords('Where Do You Think You Will Go?')
+			random.shuffle(self.randomPos)
+			x,y = self.randomPos[0]
+			Sequence(Wait(2.0),Func(self.setSpos,x,y,20),Func(self.delete,self.words)).start()
+			
+		if type == 'jumpEve':
+			self.words = addWords('I Do Not Add Any Thing! ')
+			Sequence(Wait(2.0),Func(self.delete,self.words)).start()
+		
+	
+	def movepRalph(self):
+		x,y,z = self.ralph.getPos()
+		x_ = 0.3 * x / 160
+		z_ = 0.3 * y / 160
+		y_ = 0
+		self.pralph.setPos(x_,y_,z_)
+			
+	
+	#集中处理所有需要每帧检查的东东
+	def doAll(self,task):
+		dt = task.time - self.last
+		self.last = task.time 
+		self.handleTex()
+		self.moveRalph(dt)
+		self.movepRalph()
+		self._handleCube()
+		self.handleCube()
+		self.AIworld.update()
+		self.final()
+		return task.cont
+	
+	def changeMode(self,status=None):
+		if self.v == [0]:
+			self.env.remove()
+			self.env = loader.loadModel('models/environ.bam')
+			self.env.reparentTo(render)
+			self.ralph.setPos(0,20,0)
+			self.fire.remove()
+			self.pandaGNP.remove()
+			self.cardMap.remove()
+			self.moveSpeed = 20
+			self.rotateSpeed = 80
+			self.camZ = 2
+			for i in range(len(self.eves)):
+				self.eves[i][0].clean()
+			self.eves = []
+			self.eveNumber = 0
+			for cube in self.cubes:
+				self.toRemove.append(cube)
+			self.buildStart()
+			
+		if self.v == [1]:
+			self.env.remove()
+			self.env = loader.loadModel('models/environm.bam')
+			self.env.reparentTo(render)
+			self.fountain.remove()
+			self.makeCardMap()
+			self.ralph.setPos(-76,-74,0)
+			self.moveSpeed = 10
+			self.rotateSpeed = 60
+			self.camZ = 4
+			for cube in self.cubes:
+				self.toRemove.append(cube)
+			self.buildFinal()
+			
+	def changeMusic(self,status):
+		if status and self.sound1.status() != self.sound1.PLAYING:
+			self.sound1.setLoop(True)
+			self.sound1.play()
+		else:
+			self.sound1.stop()
+	
+	def makeCardMap(self):
+		
+		cm=CardMaker('')
+		cm.setFrame(-0.2,0.2,-0.2,0.2)
+		self.cardMap = base.camera.attachNewNode(cm.generate())
+		
+		self.pralph = loader.loadModel("models/planet_sphere.egg.pz")
+		self.pralph.reparentTo(self.cardMap)
+		self.pralph.setScale(0.01)
+		self.pralph.setColor(0,0,1,1)
+		
+		self.startP = loader.loadModel("models/planet_sphere.egg.pz")
+		self.startP.reparentTo(self.cardMap)
+		self.startP.setScale(0.015)
+		self.startP.setColor(0,1,0,1)
+		self.startP.setPos(-0.17,0,-0.17)
+		
+		self.finalP = loader.loadModel("models/planet_sphere.egg.pz")
+		self.finalP.reparentTo(self.cardMap)
+		self.finalP.setScale(0.015)
+		self.finalP.setColor(1,0,0,1)
+		self.finalP.setPos(0.17,0,0.17)
+		
+		self.cardMap.setTransparency(TransparencyAttrib.MAlpha)
+		self.cardMap.setPos(0.8,3,0.6)
+		self.cardMap.setColor(1,0.6,0.6,0.5)
+
+
+		
+	def buildFinal(self):
+		base.enableParticles()
+		self.fire = ParticleEffect()
+		self.fire.loadConfig('fireish.ptf')
+		self.fire.setPos(74,75,0)
+		self.fire.start(render)
+		self.fire.setScale(0.5)
+		
+		self.pandaGNP = render.attachNewNode('pandaGNP')
+		self.pandaGNP.setPos(74,75,0)
+		self.pandaG = Actor("models/panda-model.egg.pz",{"run":"models/panda-walk4.egg.pz"})
+		self.pandaG.loop('run')
+		self.pandaG.reparentTo(self.pandaGNP)
+		self.pandaG.setPos(1,0,0)
+		self.pandaG.setScale(0.001,0.001,0.001)
+		self.pandaGMove = self.pandaGNP.hprInterval(20.0,Point3(-360,0,0),startHpr=Point3(0,0,0))
+		self.pandaGMove.loop()
+		
+		for pos in self.evePos:
+			x,y,bool = pos
+			self.makeEve(x,y,bool)
+			
+		for i in range(25):
+			x,y = self.node[i]
+			self.makeCube(x,y,3,render,6)
+	
+	def buildStart(self):
+		
+		for i in range(4):
+			self.makeCube(4,2*i-4,1,self.startCubes,2)
+			self.makeCube(4,2*i-4,3,self.startCubes,2)
+			self.makeCube(-6,2*i-4,1,self.startCubes,2)
+			self.makeCube(-6,2*i-4,3,self.startCubes,2)
+			self.makeCube(2*i-4,4,1,self.startCubes,2)
+			self.makeCube(2*i-4,4,3,self.startCubes,2)
+			self.makeCube(2*i-4,-6,1,self.startCubes,2)
+			self.makeCube(2*i-4,-6,3,self.startCubes,2)
+		self.makeCube(2,2,1,self.startCubes,2)
+		self.makeCube(2,2,3,self.startCubes,2)
+		self.makeCube(2,-4,1,self.startCubes,2)
+		self.makeCube(2,-4,3,self.startCubes,2)
+		self.makeCube(-4,2,1,self.startCubes,2)
+		self.makeCube(-4,2,3,self.startCubes,2)
+		self.makeCube(-4,-4,1,self.startCubes,2)
+		self.makeCube(-4,-4,3,self.startCubes,2)
+		
+		for i in range(10):
+			for j in range(10):
+				pos = (2*i-10,2*j-10,1)
+				if pos not in self.cubes.values():
+					self.makeCube(2*i-10,2*j-10,1,self.startCubes,3)
+					
+		for i in range(4):
+			self.makeCube(2*i-4,0,3,self.startCubes,5)
+			self.makeCube(2*i-4,-2,3,self.startCubes,5)
+		
+		self.makeCube(0,2,3,self.startCubes,5)
+		self.makeCube(-2,2,3,self.startCubes,5)
+		self.makeCube(-2,-4,3,self.startCubes,5)
+		self.makeCube(0,-4,3,self.startCubes,5)
+		
+		#喷泉
+		base.enableParticles()
+		self.fountain = ParticleEffect()
+		self.fountain.loadConfig('fountain.ptf')
+		self.fountain.setPos(-1,0,4)
+		self.fountain.start(render)
+		self.fountain.setScale(5)
+		
+		
+		for i in range(3):
+			for j in range(7-2*i):
+				for k in range(7-2*i):
+					self.makeCube(30+2*j,30+2*k,1+2*i,self.startCubes,1)
+					
+		
+		for i in range(3):
+			for j in range(7-2*i):
+				for k in range(7-2*i):
+					self.makeCube(-30+2*j,30+2*k,1+2*i,self.startCubes,2)
+					
+		
+		for i in range(3):
+			for j in range(7-2*i):
+				for k in range(7-2*i):
+					self.makeCube(30+2*j,-30+2*k,1+2*i,self.startCubes,3)
+		
+		
+		for i in range(3):
+			for j in range(7-2*i):
+				for k in range(7-2*i):
+					self.makeCube(-30+2*j,-30+2*k,1+2*i,self.startCubes,0)
+			
+		
+
+class Eve(FSM):
+	def __init__(self):
+		FSM.__init__(self,'Eve')
+		self.actor = Actor('models/eve.egg.pz',{'walk':'models/eve_walk.egg.pz'})
+		self.actor.setScale(0.4)
+		self.actor.reparentTo(render)
+		self.interval = self.actor.actorInterval("walk", playRate = 2)
+		self.ColNP = self.actor.attachNewNode(CollisionNode('eve'))
+		self.Sphere = CollisionSphere(0,0,2,1.5)
+		self.ColNP.node().addSolid(self.Sphere)
+		self.ColNP.node().setFromCollideMask(0)
+		
+	def enterWalk(self,x,y,bool):
+		self.x = x
+		self.y = y
+		self.bool = bool
+		self.ColNP.node().setIntoCollideMask(BitMask32.bit(0))
+		self.interval.loop()
+		if bool == 0:
+			self.PosInterval1 = self.actor.posInterval(8,Point3(x,y,0),startPos=Point3(x+8,y,0))
+			self.PosInterval2 = self.actor.posInterval(8,Point3(x+8,y,0),startPos=Point3(x,y,0))
+			self.HprInterval1 = self.actor.hprInterval(3,Point3(90,0,0),startHpr=Point3(-90,0,0))
+			self.HprInterval2 = self.actor.hprInterval(3,Point3(-90,0,0),startHpr=Point3(90,0,0))
+		elif bool == 1:
+			self.PosInterval1 = self.actor.posInterval(8,Point3(x,y,0),startPos=Point3(x,y+8,0))
+			self.PosInterval2 = self.actor.posInterval(8,Point3(x,y+8,0),startPos=Point3(x,y,0))
+			self.HprInterval1 = self.actor.hprInterval(3,Point3(180,0,0),startHpr=Point3(0,0,0))
+			self.HprInterval2 = self.actor.hprInterval(3,Point3(0,0,0),startHpr=Point3(180,0,0))
+
+		self.Pace = Sequence(self.PosInterval1,self.HprInterval1,self.PosInterval2,self.HprInterval2)
+		#没有名字，不知道碍不碍事
+		self.Pace.loop()
+		
+	def exitWalk(self):
+		self.interval.pause()
+		self.Pace.pause()
+		
+	def enterMagic(self):
+		self.actor.setZ(1)
+		self.magicInterval = self.actor.hprInterval(1,Point3(90,0,0),startHpr=Point3(450,0,0))
+		self.magicPace = Sequence(Wait(1.0),self.magicInterval,Func(self.exitMagic),Func(self.enterWalk,self.x,self.y,self.bool))
+		self.magicPace.start()
+		self.ColNP.node().setIntoCollideMask(0)
+		
+	def exitMagic(self):
+		self.magicPace.pause()
+	
+	def clean(self):
+		self.actor.delete()
+
+
+w = World()
+run()
