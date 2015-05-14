@@ -1,0 +1,164 @@
+# coding: utf-8
+#中文注释/ in chinese
+
+import direct.directbase.DirectStart
+from direct.showbase.DirectObject import DirectObject
+from panda3d.core import PandaNode,NodePath,TextNode
+from panda3d.core import GeomVertexFormat, GeomVertexData,Geom, GeomTriangles, GeomVertexWriter
+from panda3d.core import Vec3, Vec4, VBase4,Point3,CardMaker,GeomNode,BitMask32
+from panda3d.core import CollisionTraverser,CollisionNode
+from panda3d.core import CollisionHandlerQueue,CollisionRay,CollisionSphere, CollisionSegment
+from math import sin,cos,pi
+import random
+
+
+floorTex=loader.loadTexture('/文档/小日子/python&game/pyminecraft/texture1.png')
+sandTex=loader.loadTexture('/文档/小日子/python&game/pyminecraft/texture3.png')
+brickTex=loader.loadTexture('/文档/小日子/python&game/pyminecraft/texture2.png')
+grassTex=loader.loadTexture('/文档/小日子/python&game/pyminecraft/texture4.png')
+waterTex=loader.loadTexture('/文档/小日子/python&game/pyminecraft/texture5.jpg')
+cloudTex = None
+
+
+
+
+
+
+#创建一个立方体
+
+
+
+def myNormalize(myVec):
+	myVec.normalize()
+	return myVec
+
+def makeSquare(x1,y1,z1, x2,y2,z2, NDirection):
+	format=GeomVertexFormat.getV3n3t2()
+	vdata=GeomVertexData('square', format, Geom.UHStatic)
+
+	vertex=GeomVertexWriter(vdata, 'vertex')
+	normal=GeomVertexWriter(vdata, 'normal')#光线法线，什么意思我还不知道
+	texcoord=GeomVertexWriter(vdata, 'texcoord')
+	
+	#make sure we draw the sqaure in the right plane
+	if x1!=x2:
+		vertex.addData3f(x1, y1, z1)
+		vertex.addData3f(x2, y1, z1)
+		vertex.addData3f(x2, y2, z2)
+		vertex.addData3f(x1, y2, z2)
+
+		normal.addData3f(myNormalize(Vec3(2*x1-1, 2*y1-1, 2*z1-1)))
+		normal.addData3f(myNormalize(Vec3(2*x2-1, 2*y1-1, 2*z1-1)))
+		normal.addData3f(myNormalize(Vec3(2*x2-1, 2*y2-1, 2*z2-1)))
+		normal.addData3f(myNormalize(Vec3(2*x1-1, 2*y2-1, 2*z2-1)))
+		
+	else:
+		vertex.addData3f(x1, y1, z1)
+		vertex.addData3f(x2, y2, z1)
+		vertex.addData3f(x2, y2, z2)
+		vertex.addData3f(x1, y1, z2)
+
+		normal.addData3f(myNormalize(Vec3(2*x1-1, 2*y1-1, 2*z1-1)))
+		normal.addData3f(myNormalize(Vec3(2*x2-1, 2*y2-1, 2*z1-1)))
+		normal.addData3f(myNormalize(Vec3(2*x2-1, 2*y2-1, 2*z2-1)))
+		normal.addData3f(myNormalize(Vec3(2*x1-1, 2*y1-1, 2*z2-1)))
+
+
+	texcoord.addData2f(0.0, 1.0)
+	texcoord.addData2f(0.0, 0.0)
+	texcoord.addData2f(1.0, 0.0)
+	texcoord.addData2f(1.0, 1.0)
+
+	#quads arent directly supported by the Geom interface
+	#you might be interested in the CardMaker class if you are
+	#interested in rectangle though
+	tri1=GeomTriangles(Geom.UHStatic)
+	tri2=GeomTriangles(Geom.UHStatic)
+	
+	if NDirection :
+		tri1.addVertex(0)
+		tri1.addVertex(1)
+		tri1.addVertex(3)
+
+		tri2.addConsecutiveVertices(1,3)
+		
+	else:
+		tri1.addVertex(3)
+		tri1.addVertex(1)
+		tri1.addVertex(0)
+
+		tri2.addVertex(3)
+		tri2.addVertex(2)
+		tri2.addVertex(1)
+
+	tri1.closePrimitive()
+	tri2.closePrimitive()
+
+
+	square=Geom(vdata)
+	square.addPrimitive(tri1)
+	square.addPrimitive(tri2)
+	
+	return square
+	
+def makecube(x,y,z,myRender):
+	square0=makeSquare(x-1, y-1, z-1, x+1, y-1, z+1, True)
+	square1=makeSquare(x-1, y+1, z-1, x+1, y+1, z+1, False)
+	square2=makeSquare(x-1, y+1, z+1, x+1, y-1, z+1, False)
+	square3=makeSquare(x-1, y+1, z-1, x+1, y-1, z-1, True)
+	square4=makeSquare(x-1, y-1, z-1, x-1, y+1, z+1, False)
+	square5=makeSquare(x+1, y-1, z-1, x+1, y+1, z+1, True)
+	
+	snode=GeomNode('square')
+	snode.addGeom(square0)
+	snode.addGeom(square1)
+	snode.addGeom(square2)
+	snode.addGeom(square3)
+	snode.addGeom(square4)
+	snode.addGeom(square5)
+
+	cube=myRender.attachNewNode(snode)
+
+	return cube
+
+#草地的那种，不会写
+def makecube4(x,y,z,myRender):
+	square0=makeSquare(x-1, y-1, z-1, x+1, y-1, z+1, True)
+	square1=makeSquare(x-1, y+1, z-1, x+1, y+1, z+1, False)
+	square2=makeSquare(x-1, y+1, z+1, x+1, y-1, z+1, False)
+	square3=makeSquare(x-1, y+1, z-1, x+1, y-1, z-1, True)
+	square4=makeSquare(x-1, y-1, z-1, x-1, y+1, z+1, False)
+	square5=makeSquare(x+1, y-1, z-1, x+1, y+1, z+1, True)
+	
+	
+	snode=GeomNode('topface')
+	snode.addGeom(square2)
+	
+	snode1 = GeomNode('sideface')
+	snode1.addGeom(square0)
+	snode1.addGeom(square1)
+	snode1.addGeom(square4)
+	snode1.addGeom(square5)
+
+	snode2 = GeomNode('bottomface')
+	snode2.addGeom(square3)
+
+
+	cube=myRender.attachNewNode('grass cube')
+	cube.attachNewNode(snode)
+	cube.attachNewNode(snode1)
+	cube.attachNewNode(snode2)
+	
+	cube.attachNewNode(snode).setTexture(loader.loadTexture('/文档/小日子/python&game/pyminecraft/texture5.png'))
+	cube.attachNewNode(snode1).	setTexture(loader.loadTexture('/文档/小日子/python&game/pyminecraft/texture6.png'))
+	cube.attachNewNode(snode2).setTexture(loader.loadTexture('/文档/小日子/python&game/pyminecraft/texture4.png'))
+	
+	return cube
+
+
+cube = makecube(0,0,0,render)
+cCube = cube.attachNewNode(CollisionNode('cube'))
+cCube.node().addSolid(CollisionSphere(0,0,0,1))
+cCube.node().setIntoCollideMask(BitMask32.bit(1))
+
+cube.writeBamFile("cube4.bam")
